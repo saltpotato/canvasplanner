@@ -24,6 +24,10 @@
     <button @onclick="ExportMermaid">Export Mermaid</button>
 </div>
 
+<p style="color:#555; font-size:14px;">
+    Drag a side dot to another block's side to connect. Right-click a link to set arrow direction or type (arrow/aggregation).
+</p>
+
 <pre>@mermaidOutput</pre>
 
 <canvas id="diagramCanvas" width="1000" height="600"
@@ -82,9 +86,27 @@
     }
 
     [JSInvokable]
-    public Task AddConnection(string from, string to)
+    public Task AddConnection(string from, string to, string fromSide, string toSide, string direction = "forward", string kind = "arrow")
     {
-        links.Add(new Link(from, to));
+        if (links.Any(l => l.From == from && l.To == to && l.FromSide == fromSide && l.ToSide == toSide))
+            return Task.CompletedTask;
+
+        links.Add(new Link(from, to, fromSide, toSide, direction, kind));
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task UpdateConnectionMeta(string from, string to, string fromSide, string toSide, string direction, string kind)
+    {
+        var link = links.FirstOrDefault(l =>
+            l.From == from && l.To == to && l.FromSide == fromSide && l.ToSide == toSide);
+
+        if (link != null)
+        {
+            links.Remove(link);
+            links.Add(link with { Direction = direction, Kind = kind });
+        }
+
         return Task.CompletedTask;
     }
 

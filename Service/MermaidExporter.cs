@@ -39,7 +39,16 @@ namespace canvasplanner.Service
             // Links (Mermaid syntax: from --> to)
             foreach (var l in links)
             {
-                sb.AppendLine($"    {l.From} --> {l.To}");
+                var label = l.Kind == "arrow" ? "" : $"|{l.Kind}|";
+                var line = l.Direction switch
+                {
+                    "backward" => $"{l.From} <--{label}-- {l.To}",
+                    "both" => $"{l.From} <--{label}--> {l.To}",
+                    "none" => $"{l.From} ---{label}--- {l.To}",
+                    _ => $"{l.From} --{label}--> {l.To}"
+                };
+
+                sb.AppendLine($"    {line}");
             }
 
             return sb.ToString();

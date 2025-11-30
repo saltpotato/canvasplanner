@@ -1,10 +1,10 @@
 ﻿using canvasplanner.Data;
 using System.Text.Json;
-
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using System.Linq;
 namespace canvasplanner.Service;
-    public class DiagramStorageService
+
+public class DiagramStorageService
 {
     private readonly DiagramDbContext _db;
 
@@ -43,7 +43,19 @@ namespace canvasplanner.Service;
 
         var obj = JsonSerializer.Deserialize<DiagramPayload>(item.Json);
 
-        return (obj.blocks ?? new(), obj.links ?? new());
+        var loadedLinks = obj.links ?? new();
+        // normalize defaults for legacy diagrams
+        loadedLinks = loadedLinks
+            .Select(l => new Link(
+                l.From,
+                l.To,
+                string.IsNullOrWhiteSpace(l.FromSide) ? "right" : l.FromSide,
+                string.IsNullOrWhiteSpace(l.ToSide) ? "left" : l.ToSide,
+                string.IsNullOrWhiteSpace(l.Direction) ? "forward" : l.Direction,
+                string.IsNullOrWhiteSpace(l.Kind) ? "arrow" : l.Kind))
+            .ToList();
+
+        return (obj.blocks ?? new(), loadedLinks);
     }
 
     record DiagramPayload

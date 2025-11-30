@@ -16,6 +16,10 @@
 
     public record Link(
         string From,   // source node ID
-        string To      // destination node ID
+        string To,     // destination node ID
+        string FromSide = "right",
+        string ToSide = "left",
+        string Direction = "forward", // forward, backward, both, none
+        string Kind = "arrow"         // arrow, aggregation
     );
 }
