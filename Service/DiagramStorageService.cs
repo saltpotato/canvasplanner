@@ -41,7 +41,16 @@ public class DiagramStorageService
         var item = await _db.Diagrams.FindAsync(id);
         if (item == null) return (new List<Block>(), new List<Link>());
 
-        var obj = JsonSerializer.Deserialize<DiagramPayload>(item.Json);
+        var obj = JsonSerializer.Deserialize<DiagramPayload>(item.Json) ?? new DiagramPayload();
+
+        var loadedBlocks = (obj.blocks ?? new())
+            .Select(b => new Block(
+                b.Id,
+                b.X,
+                b.Y,
+                b.Text,
+                string.IsNullOrWhiteSpace(b.Command) ? "" : b.Command))
+            .ToList();
 
         var loadedLinks = obj.links ?? new();
         // normalize defaults for legacy diagrams
@@ -55,7 +64,7 @@ public class DiagramStorageService
                 string.IsNullOrWhiteSpace(l.Kind) ? "arrow" : l.Kind))
             .ToList();
 
-        return (obj.blocks ?? new(), loadedLinks);
+        return (loadedBlocks, loadedLinks);
     }
 
     record DiagramPayload

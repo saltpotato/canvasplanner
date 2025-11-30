@@ -1,10 +1,12 @@
 ﻿@page "/"
 @using canvasplanner.Service
 @using canvasplanner.Data
+@using System.Text.Json
 @inject IJSRuntime JS
 @inject DiagramStorageService Storage
+@inject LlmService Llm
 
-<h3>Diagram Editor</h3>
+<h3>Diagram Editor@(IsDirty ? "*" : "")</h3>
 
 <div style="margin-bottom:10px;">
     <input @bind="saveLabel" placeholder="Label..." />
@@ -25,7 +27,7 @@
 </div>
 
 <p style="color:#555; font-size:14px;">
-    Drag a side dot to another block's side to connect. Right-click a link to set arrow direction or type (arrow/aggregation).
+    Drag a side dot to another block's side to connect. Right-click a block to set LLM command or run it. Right-click a link to set arrow direction or type (arrow/aggregation).
 </p>
 
 <pre>@mermaidOutput</pre>
@@ -46,10 +48,13 @@
     string saveLabel = "";
     string selectedDiagramId = "";
     List<(int Id, string Label)> savedList = new();
+    string lastSnapshot = "";
+    bool IsDirty => SnapshotState() != lastSnapshot;
 
     protected override async Task OnInitializedAsync()
     {
         await LoadList();
+        isDirty = false;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -60,14 +65,18 @@
                 "diagram.init",
                 DotNetObjectReference.Create(this)
             );
+
+            lastSnapshot = SnapshotState();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
     void AddBlock()
     {
         var id = $"node{blocks.Count + 1}";
-        blocks.Add(new Block(id, 100, 100, "New Block"));
+        blocks.Add(new Block(id, 100, 100, "New Block", ""));
         JS.InvokeVoidAsync("diagram.draw", blocks, links);
+        NotifyChanged();
     }
 
     void ExportMermaid() => mermaidOutput = MermaidExporter.ToMermaid2(blocks, links);
@@ -82,6 +91,7 @@
             blocks.Remove(b);
             blocks.Add(b with { X = x, Y = y });
         }
+        NotifyChanged();
         return Task.CompletedTask;
     }
 
@@ -92,6 +102,7 @@
             return Task.CompletedTask;
 
         links.Add(new Link(from, to, fromSide, toSide, direction, kind));
+        NotifyChanged();
         return Task.CompletedTask;
     }
 
@@ -107,6 +118,7 @@
             links.Add(link with { Direction = direction, Kind = kind });
         }
 
+        NotifyChanged();
         return Task.CompletedTask;
     }
 
@@ -120,7 +132,36 @@
             blocks.Add(block with { Text = text ?? "" });
         }
 
+        NotifyChanged();
         return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task UpdateBlockMeta(string id, string? text, string? command)
+    {
+        var block = blocks.FirstOrDefault(b => b.Id == id);
+        if (block != null)
+        {
+            blocks.Remove(block);
+            blocks.Add(block with
+            {
+                Text = text ?? block.Text,
+                Command = command ?? block.Command
+            });
+        }
+
+        NotifyChanged();
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public async Task<string> ExecuteBlockCommand(string id)
+    {
+        var block = blocks.FirstOrDefault(b => b.Id == id);
+        if (block == null) return "Block not found.";
+        if (string.IsNullOrWhiteSpace(block.Command)) return "No LLM command set.";
+
+        return await Llm.ExecuteAsync(block.Command);
     }
 
     // Saving / Loading
@@ -138,6 +179,8 @@
 
         saveLabel = "";
         await LoadList();
+        lastSnapshot = SnapshotState();
+        await InvokeAsync(StateHasChanged);
     }
 
     async Task LoadFromDb(ChangeEventArgs e)
@@ -152,6 +195,26 @@
             links = l;
 
             await JS.InvokeVoidAsync("diagram.draw", blocks, links);
+            lastSnapshot = SnapshotState();
+            await InvokeAsync(StateHasChanged);
         }
     }
+
+    string SnapshotState()
+    {
+        var orderedBlocks = blocks
+            .OrderBy(b => b.Id)
+            .Select(b => new { b.Id, b.X, b.Y, b.Text, b.Command });
+
+        var orderedLinks = links
+            .OrderBy(l => l.From)
+            .ThenBy(l => l.To)
+            .ThenBy(l => l.FromSide)
+            .ThenBy(l => l.ToSide)
+            .Select(l => new { l.From, l.To, l.FromSide, l.ToSide, l.Direction, l.Kind });
+
+        return JsonSerializer.Serialize(new { blocks = orderedBlocks, links = orderedLinks });
+    }
+
+    void NotifyChanged() => InvokeAsync(StateHasChanged);
 }

@@ -9,6 +9,7 @@
     links: [],
     connectStart: null,   // { blockId, side }
     previewTarget: null,  // { x, y, blockId?, side? }
+    hoverBlockId: null,
     linkWidth: 2,
     handleRadius: 6,
     blockSize: { w: 100, h: 50 },
@@ -157,6 +158,7 @@
     },
 
     drawHandles(block) {
+        if (!this.shouldShowHandles(block.id)) return;
         const handles = this.getHandleCenters(block);
         this.ctx.fillStyle = "#444";
         Object.values(handles).forEach(p => {
@@ -164,6 +166,10 @@
             this.ctx.arc(p.x, p.y, this.handleRadius, 0, Math.PI * 2);
             this.ctx.fill();
         });
+    },
+
+    shouldShowHandles(blockId) {
+        return this.hoverBlockId === blockId || (this.connectStart && this.connectStart.blockId === blockId);
     },
 
     getHandleCenters(block) {
@@ -258,6 +264,7 @@
         if (handleHit) {
             this.connectStart = { blockId: handleHit.blockId, side: handleHit.side };
             this.previewTarget = { x, y };
+            this.hoverBlockId = handleHit.blockId;
             this.draw();
             return;
         }
@@ -275,6 +282,9 @@
         let canvasX = e.clientX - rect.left;
         let canvasY = e.clientY - rect.top;
 
+        const hoverHit = this.hitTest(canvasX, canvasY);
+        this.hoverBlockId = hoverHit?.id ?? (this.connectStart ? this.connectStart.blockId : null);
+
         if (this.connectStart) {
             const hit = this.hitTest(canvasX, canvasY);
             if (hit && hit.id !== this.connectStart.blockId) {
@@ -288,7 +298,10 @@
             return;
         }
 
-        if (!this.draggingId) return;
+        if (!this.draggingId) {
+            this.draw(this.blocks, this.links);
+            return;
+        }
 
         let x = canvasX - this.offsetX;
         let y = canvasY - this.offsetY;
@@ -330,6 +343,7 @@
 
             this.connectStart = null;
             this.previewTarget = null;
+            this.hoverBlockId = null;
             this.draw(this.blocks, this.links);
             return;
         }
@@ -349,13 +363,19 @@
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        const link = this.findLinkNear(x, y);
-        if (!link) return;
+        const block = this.hitTest(x, y);
+        if (block) {
+            this.showBlockMenu(block, e.clientX, e.clientY);
+            return;
+        }
 
-        this.showContextMenu(link, e.clientX, e.clientY);
+        const link = this.findLinkNear(x, y);
+        if (link) {
+            this.showLinkMenu(link, e.clientX, e.clientY);
+        }
     },
 
-    showContextMenu(link, clientX, clientY) {
+    showLinkMenu(link, clientX, clientY) {
         this.hideContextMenu();
 
         const menu = document.createElement("div");
@@ -427,6 +447,86 @@
             { label: "Arrow", value: "arrow" },
             { label: "Aggregation (diamond)", value: "aggregation" }
         ], link.kind ?? "arrow", "kind");
+
+        document.body.appendChild(menu);
+        this.contextMenuEl = menu;
+    },
+
+    showBlockMenu(block, clientX, clientY) {
+        this.hideContextMenu();
+
+        const menu = document.createElement("div");
+        menu.style.position = "fixed";
+        menu.style.left = `${clientX}px`;
+        menu.style.top = `${clientY}px`;
+        menu.style.background = "#fff";
+        menu.style.border = "1px solid #999";
+        menu.style.padding = "8px";
+        menu.style.boxShadow = "0 2px 6px rgba(0,0,0,0.2)";
+        menu.style.font = "13px sans-serif";
+        menu.style.zIndex = 1000;
+        menu.addEventListener("click", ev => ev.stopPropagation());
+
+        const title = document.createElement("div");
+        title.textContent = "Block";
+        title.style.fontWeight = "bold";
+        title.style.marginBottom = "6px";
+        menu.appendChild(title);
+
+        let runBtn = null;
+        const updateRunBtn = () => {
+            if (!runBtn) return;
+            runBtn.disabled = !updated.command || updated.command.trim().length === 0;
+        };
+
+        const addInput = (labelText, value, onChange) => {
+            const label = document.createElement("div");
+            label.textContent = labelText;
+            label.style.marginTop = "4px";
+            menu.appendChild(label);
+
+            const input = document.createElement("textarea");
+            input.value = value ?? "";
+            input.rows = 4;
+            input.style.width = "240px";
+            input.addEventListener("keydown", ev => ev.stopPropagation());
+            input.addEventListener("change", ev => { onChange(ev.target.value); updateRunBtn(); });
+            input.addEventListener("input", ev => { onChange(ev.target.value); updateRunBtn(); });
+            menu.appendChild(input);
+        };
+
+        let updated = { command: block.command ?? "" };
+        addInput("LLM Command", updated.command, v => updated.command = v);
+
+        const saveBtn = document.createElement("button");
+        saveBtn.textContent = "Apply";
+        saveBtn.style.marginTop = "8px";
+        saveBtn.addEventListener("click", () => {
+            block.command = updated.command;
+            this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command);
+            this.hideContextMenu();
+        });
+        menu.appendChild(saveBtn);
+
+        runBtn = document.createElement("button");
+        runBtn.textContent = "Run LLM";
+        runBtn.style.marginTop = "8px";
+        runBtn.style.marginLeft = "6px";
+        updateRunBtn();
+        runBtn.addEventListener("click", async () => {
+            block.command = updated.command;
+            await this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command);
+            runBtn.disabled = true;
+            try {
+                const result = await this.dotnet.invokeMethodAsync("ExecuteBlockCommand", block.id);
+                alert(result);
+            } catch (err) {
+                alert("Failed to run LLM: " + err);
+            } finally {
+                runBtn.disabled = false;
+            }
+        });
+        menu.appendChild(runBtn);
 
         document.body.appendChild(menu);
         this.contextMenuEl = menu;

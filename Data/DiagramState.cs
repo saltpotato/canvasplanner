@@ -8,11 +8,12 @@
         public DateTime SavedAt { get; set; }
     }
     public record Block(
-    string Id,     // unique identifier: "node1", "node2", ...
-    double X,      // position on canvas
-    double Y,
-    string Text    // display label
-);
+        string Id,     // unique identifier: "node1", "node2", ...
+        double X,      // position on canvas
+        double Y,
+        string Text,    // display label
+        string Command = ""
+    );
 
     public record Link(
         string From,   // source node ID
