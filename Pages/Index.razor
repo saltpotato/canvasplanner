@@ -88,6 +88,19 @@
         return Task.CompletedTask;
     }
 
+    [JSInvokable]
+    public Task UpdateBlockText(string id, string text)
+    {
+        var block = blocks.FirstOrDefault(b => b.Id == id);
+        if (block != null)
+        {
+            blocks.Remove(block);
+            blocks.Add(block with { Text = text ?? "" });
+        }
+
+        return Task.CompletedTask;
+    }
+
     // Saving / Loading
     async Task LoadList()
     {

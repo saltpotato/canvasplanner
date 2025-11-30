@@ -16,6 +16,7 @@
         this.canvas.addEventListener("mousedown", this.onMouseDown.bind(this));
         this.canvas.addEventListener("mousemove", this.onMouseMove.bind(this));
         this.canvas.addEventListener("mouseup", this.onMouseUp.bind(this));
+        this.canvas.addEventListener("dblclick", this.onDoubleClick.bind(this));
     },
 
     draw: function (blocks, links) {
@@ -92,5 +93,21 @@
                 block.id, block.x, block.y);
         }
         this.draggingId = null;
+    },
+
+    onDoubleClick(e) {
+        let rect = this.canvas.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        let y = e.clientY - rect.top;
+
+        let hit = this.hitTest(x, y);
+        if (!hit) return;
+
+        const newText = prompt("Edit block text:", hit.text);
+        if (newText === null) return;
+
+        hit.text = newText;
+        this.draw(this.blocks, this.links);
+        this.dotnet.invokeMethodAsync("UpdateBlockText", hit.id, newText);
     }
 };
