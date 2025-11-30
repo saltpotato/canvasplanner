@@ -46,6 +46,7 @@
     
     List<Block> blocks = new();
     List<Link> links = new();
+    Dictionary<string, string> blockOutputs = new();
 
     string mermaidOutput = "";
 
@@ -62,6 +63,7 @@
     {
         await LoadList();
         lastSnapshot = SnapshotState();
+        blockOutputs.Clear();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -169,7 +171,27 @@
         if (block == null) return "Block not found.";
         if (string.IsNullOrWhiteSpace(block.Command)) return "No LLM command set.";
 
-        return await Llm.ExecuteAsync(block.Command, block.UseSearch);
+        var inbound = links.Where(l => l.To == id).ToList();
+        var contextParts = new List<string>();
+        foreach (var link in inbound)
+        {
+            if (blockOutputs.TryGetValue(link.From, out var prevOutput))
+            {
+                var fromBlock = blocks.FirstOrDefault(b => b.Id == link.From);
+                var label = fromBlock?.Text ?? link.From;
+                contextParts.Add($"From {label} ({link.From}):\n{prevOutput}");
+            }
+        }
+
+        var prompt = block.Command;
+        if (contextParts.Count > 0)
+        {
+            prompt = string.Join("\n\n", contextParts) + "\n\n" + block.Command;
+        }
+
+        var result = await Llm.ExecuteAsync(prompt, block.UseSearch);
+        blockOutputs[id] = result ?? "";
+        return result ?? "";
     }
 
     // Saving / Loading
@@ -200,6 +222,7 @@
         selectedDiagramId = savedId.ToString();
         await LoadList();
         lastSnapshot = SnapshotState();
+        blockOutputs.Clear();
         statusMessage = "Saved.";
         await InvokeAsync(StateHasChanged);
     }
@@ -220,6 +243,7 @@
             await JS.InvokeVoidAsync("diagram.draw", blocks, links);
             lastSnapshot = SnapshotState();
             statusMessage = "";
+            blockOutputs.Clear();
             await InvokeAsync(StateHasChanged);
         }
     }
