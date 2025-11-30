@@ -490,12 +490,17 @@
             input.rows = 4;
             input.style.width = "240px";
             input.addEventListener("keydown", ev => ev.stopPropagation());
-            input.addEventListener("change", ev => { onChange(ev.target.value); updateRunBtn(); });
+            input.addEventListener("change", ev => { onChange(ev.target.value); updateRunBtn(); persistMeta(); });
             input.addEventListener("input", ev => { onChange(ev.target.value); updateRunBtn(); });
             menu.appendChild(input);
         };
 
         let updated = { command: block.command ?? "", useSearch: block.useSearch ?? false };
+        const persistMeta = () => {
+            block.command = updated.command;
+            block.useSearch = updated.useSearch;
+            this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command, block.useSearch);
+        };
         addInput("LLM Command", updated.command, v => updated.command = v);
 
         const searchWrapper = document.createElement("div");
@@ -507,6 +512,7 @@
         searchCheckbox.addEventListener("change", ev => {
             updated.useSearch = ev.target.checked;
             updateRunBtn();
+            persistMeta();
         });
         searchLabel.appendChild(searchCheckbox);
         searchLabel.appendChild(document.createTextNode(" Allow web search"));
@@ -517,9 +523,7 @@
         saveBtn.textContent = "Apply";
         saveBtn.style.marginTop = "8px";
         saveBtn.addEventListener("click", () => {
-            block.command = updated.command;
-            block.useSearch = updated.useSearch;
-            this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command, block.useSearch);
+            persistMeta();
             this.hideContextMenu();
         });
         menu.appendChild(saveBtn);
@@ -530,9 +534,7 @@
         runBtn.style.marginLeft = "6px";
         updateRunBtn();
         runBtn.addEventListener("click", async () => {
-            block.command = updated.command;
-            block.useSearch = updated.useSearch;
-            await this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command, block.useSearch);
+            persistMeta();
             runBtn.disabled = true;
             try {
                 const result = await this.dotnet.invokeMethodAsync("ExecuteBlockCommand", block.id);
