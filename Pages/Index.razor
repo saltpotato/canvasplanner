@@ -1,0 +1,122 @@
+﻿@page "/"
+@using canvasplanner.Service
+@using canvasplanner.Data
+@inject IJSRuntime JS
+@inject DiagramStorageService Storage
+
+<h3>Diagram Editor</h3>
+
+<div style="margin-bottom:10px;">
+    <input @bind="saveLabel" placeholder="Label..." />
+    <button @onclick="SaveToDb">Save</button>
+
+    <select @onchange="LoadFromDb">
+        <option value="">-- Load Saved Diagram --</option>
+        @foreach (var d in savedList)
+        {
+            <option value="@d.Id">@d.Label</option>
+        }
+    </select>
+</div>
+
+<div class="toolbar">
+    <button @onclick="AddBlock">Add Block</button>
+    <button @onclick="ExportMermaid">Export Mermaid</button>
+</div>
+
+<pre>@mermaidOutput</pre>
+
+<canvas id="diagramCanvas" width="1000" height="600"
+        style="border:1px solid #888;"></canvas>
+
+@code {
+
+    // Data Models
+    
+    List<Block> blocks = new();
+    List<Link> links = new();
+
+    string mermaidOutput = "";
+
+    // UI
+    string saveLabel = "";
+    string selectedDiagramId = "";
+    List<(int Id, string Label)> savedList = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await JS.InvokeVoidAsync(
+                "diagram.init",
+                DotNetObjectReference.Create(this)
+            );
+        }
+    }
+
+    void AddBlock()
+    {
+        var id = $"node{blocks.Count + 1}";
+        blocks.Add(new Block(id, 100, 100, "New Block"));
+        JS.InvokeVoidAsync("diagram.draw", blocks, links);
+    }
+
+    void ExportMermaid() => mermaidOutput = MermaidExporter.ToMermaid2(blocks, links);
+
+    // JS → C# interop
+    [JSInvokable]
+    public Task UpdateBlockPosition(string id, double x, double y)
+    {
+        var b = blocks.FirstOrDefault(b => b.Id == id);
+        if (b != null)
+        {
+            blocks.Remove(b);
+            blocks.Add(b with { X = x, Y = y });
+        }
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task AddConnection(string from, string to)
+    {
+        links.Add(new Link(from, to));
+        return Task.CompletedTask;
+    }
+
+    // Saving / Loading
+    async Task LoadList()
+    {
+        savedList = await Storage.ListAllAsync();
+    }
+
+    async Task SaveToDb()
+    {
+        if (string.IsNullOrWhiteSpace(saveLabel))
+            return;
+
+        await Storage.SaveAsync(saveLabel, blocks, links);
+
+        saveLabel = "";
+        await LoadList();
+    }
+
+    async Task LoadFromDb(ChangeEventArgs e)
+    {
+        selectedDiagramId = e.Value?.ToString() ?? "";
+
+        if (int.TryParse(selectedDiagramId, out int id))
+        {
+            var (b, l) = await Storage.LoadAsync(id);
+
+            blocks = b;
+            links = l;
+
+            await JS.InvokeVoidAsync("diagram.draw", blocks, links);
+        }
+    }
+}

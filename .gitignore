@@ -1,0 +1,24 @@
+# Build
+bin/
+obj/
+
+# Cache
+*.db-shm
+*.db-wal
+
+# SQLite database (if you want to exclude saved diagrams)
+*.db
+
+# VS Code / Visual Studio junk
+.vscode/
+.vs/
+
+# User settings
+*.user
+*.suo
+
+# Logs
+*.log
+
+# Publish output
+publish/
