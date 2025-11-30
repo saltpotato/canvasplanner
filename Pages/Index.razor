@@ -19,6 +19,11 @@
             <option value="@d.Id">@d.Label</option>
         }
     </select>
+
+    @if (!string.IsNullOrWhiteSpace(statusMessage))
+    {
+        <span style="margin-left:10px; color:#666;">@statusMessage</span>
+    }
 </div>
 
 <div class="toolbar">
@@ -27,7 +32,7 @@
 </div>
 
 <p style="color:#555; font-size:14px;">
-    Drag a side dot to another block's side to connect. Right-click a block to set LLM command or run it. Right-click a link to set arrow direction or type (arrow/aggregation).
+    Drag a side dot to another block's side to connect. Right-click a block to set LLM command (and toggle web search) or run it. Right-click a link to set arrow direction or type (arrow/aggregation).
 </p>
 
 <pre>@mermaidOutput</pre>
@@ -50,11 +55,13 @@
     List<(int Id, string Label)> savedList = new();
     string lastSnapshot = "";
     bool IsDirty => SnapshotState() != lastSnapshot;
+    string statusMessage = "";
+    bool CanSave => !string.IsNullOrWhiteSpace(saveLabel) || int.TryParse(selectedDiagramId, out _);
 
     protected override async Task OnInitializedAsync()
     {
         await LoadList();
-        isDirty = false;
+        lastSnapshot = SnapshotState();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -74,7 +81,7 @@
     void AddBlock()
     {
         var id = $"node{blocks.Count + 1}";
-        blocks.Add(new Block(id, 100, 100, "New Block", ""));
+        blocks.Add(new Block(id, 100, 100, "New Block", "", false));
         JS.InvokeVoidAsync("diagram.draw", blocks, links);
         NotifyChanged();
     }
@@ -137,7 +144,7 @@
     }
 
     [JSInvokable]
-    public Task UpdateBlockMeta(string id, string? text, string? command)
+    public Task UpdateBlockMeta(string id, string? text, string? command, bool? useSearch)
     {
         var block = blocks.FirstOrDefault(b => b.Id == id);
         if (block != null)
@@ -146,7 +153,8 @@
             blocks.Add(block with
             {
                 Text = text ?? block.Text,
-                Command = command ?? block.Command
+                Command = command ?? block.Command,
+                UseSearch = useSearch ?? block.UseSearch
             });
         }
 
@@ -161,7 +169,7 @@
         if (block == null) return "Block not found.";
         if (string.IsNullOrWhiteSpace(block.Command)) return "No LLM command set.";
 
-        return await Llm.ExecuteAsync(block.Command);
+        return await Llm.ExecuteAsync(block.Command, block.UseSearch);
     }
 
     // Saving / Loading
@@ -172,14 +180,27 @@
 
     async Task SaveToDb()
     {
-        if (string.IsNullOrWhiteSpace(saveLabel))
+        statusMessage = "";
+
+        int? targetId = int.TryParse(selectedDiagramId, out var parsedId) ? parsedId : null;
+        var targetLabel = !string.IsNullOrWhiteSpace(saveLabel)
+            ? saveLabel
+            : GetLabelForId(targetId);
+
+        if (string.IsNullOrWhiteSpace(targetLabel))
+        {
+            statusMessage = "Select a project or enter a name before saving.";
+            await InvokeAsync(StateHasChanged);
             return;
+        }
 
-        await Storage.SaveAsync(saveLabel, blocks, links);
+        var savedId = await Storage.SaveAsync(targetLabel, blocks, links, targetId);
 
-        saveLabel = "";
+        saveLabel = targetLabel;
+        selectedDiagramId = savedId.ToString();
         await LoadList();
         lastSnapshot = SnapshotState();
+        statusMessage = "Saved.";
         await InvokeAsync(StateHasChanged);
     }
 
@@ -194,8 +215,11 @@
             blocks = b;
             links = l;
 
+            saveLabel = GetLabelForId(id) ?? "";
+
             await JS.InvokeVoidAsync("diagram.draw", blocks, links);
             lastSnapshot = SnapshotState();
+            statusMessage = "";
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -204,7 +228,7 @@
     {
         var orderedBlocks = blocks
             .OrderBy(b => b.Id)
-            .Select(b => new { b.Id, b.X, b.Y, b.Text, b.Command });
+            .Select(b => new { b.Id, b.X, b.Y, b.Text, b.Command, b.UseSearch });
 
         var orderedLinks = links
             .OrderBy(l => l.From)
@@ -214,6 +238,13 @@
             .Select(l => new { l.From, l.To, l.FromSide, l.ToSide, l.Direction, l.Kind });
 
         return JsonSerializer.Serialize(new { blocks = orderedBlocks, links = orderedLinks });
+    }
+
+    string? GetLabelForId(int? id)
+    {
+        if (id == null) return null;
+        var found = savedList.FirstOrDefault(s => s.Id == id.Value);
+        return found == default ? null : found.Label;
     }
 
     void NotifyChanged() => InvokeAsync(StateHasChanged);

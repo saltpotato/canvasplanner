@@ -495,15 +495,31 @@
             menu.appendChild(input);
         };
 
-        let updated = { command: block.command ?? "" };
+        let updated = { command: block.command ?? "", useSearch: block.useSearch ?? false };
         addInput("LLM Command", updated.command, v => updated.command = v);
+
+        const searchWrapper = document.createElement("div");
+        searchWrapper.style.marginTop = "6px";
+        const searchLabel = document.createElement("label");
+        const searchCheckbox = document.createElement("input");
+        searchCheckbox.type = "checkbox";
+        searchCheckbox.checked = updated.useSearch;
+        searchCheckbox.addEventListener("change", ev => {
+            updated.useSearch = ev.target.checked;
+            updateRunBtn();
+        });
+        searchLabel.appendChild(searchCheckbox);
+        searchLabel.appendChild(document.createTextNode(" Allow web search"));
+        searchWrapper.appendChild(searchLabel);
+        menu.appendChild(searchWrapper);
 
         const saveBtn = document.createElement("button");
         saveBtn.textContent = "Apply";
         saveBtn.style.marginTop = "8px";
         saveBtn.addEventListener("click", () => {
             block.command = updated.command;
-            this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command);
+            block.useSearch = updated.useSearch;
+            this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command, block.useSearch);
             this.hideContextMenu();
         });
         menu.appendChild(saveBtn);
@@ -515,7 +531,8 @@
         updateRunBtn();
         runBtn.addEventListener("click", async () => {
             block.command = updated.command;
-            await this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command);
+            block.useSearch = updated.useSearch;
+            await this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command, block.useSearch);
             runBtn.disabled = true;
             try {
                 const result = await this.dotnet.invokeMethodAsync("ExecuteBlockCommand", block.id);

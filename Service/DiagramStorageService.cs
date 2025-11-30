@@ -13,19 +13,31 @@ public class DiagramStorageService
         _db = db;
     }
 
-    public async Task SaveAsync(string label, List<Block> blocks, List<Link> links)
+    public async Task<int> SaveAsync(string label, List<Block> blocks, List<Link> links, int? id = null)
     {
         var payload = JsonSerializer.Serialize(new { blocks, links });
 
-        var entry = new DiagramState
+        DiagramState entry;
+        if (id.HasValue)
         {
-            Label = label,
-            Json = payload,
-            SavedAt = DateTime.UtcNow
-        };
+            entry = await _db.Diagrams.FindAsync(id.Value) ?? new DiagramState();
+        }
+        else
+        {
+            entry = new DiagramState();
+        }
 
-        _db.Diagrams.Add(entry);
+        if (entry.Id == 0)
+        {
+            _db.Diagrams.Add(entry);
+        }
+
+        entry.Label = label;
+        entry.Json = payload;
+        entry.SavedAt = DateTime.UtcNow;
+
         await _db.SaveChangesAsync();
+        return entry.Id;
     }
 
     public async Task<List<(int Id, string Label)>> ListAllAsync()
@@ -49,7 +61,8 @@ public class DiagramStorageService
                 b.X,
                 b.Y,
                 b.Text,
-                string.IsNullOrWhiteSpace(b.Command) ? "" : b.Command))
+                string.IsNullOrWhiteSpace(b.Command) ? "" : b.Command,
+                b.UseSearch))
             .ToList();
 
         var loadedLinks = obj.links ?? new();

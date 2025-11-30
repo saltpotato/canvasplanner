@@ -12,7 +12,8 @@
         double X,      // position on canvas
         double Y,
         string Text,    // display label
-        string Command = ""
+        string Command = "",
+        bool UseSearch = false
     );
 
     public record Link(
