@@ -12,4 +12,5 @@ public class DiagramDbContext : DbContext
     }
 
     public DbSet<DiagramState> Diagrams => Set<DiagramState>();
+    public DbSet<BlockExecution> BlockExecutions => Set<BlockExecution>();
 }

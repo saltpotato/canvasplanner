@@ -474,9 +474,13 @@
         menu.appendChild(title);
 
         let runBtn = null;
+        let chainBtn = null;
         const updateRunBtn = () => {
             if (!runBtn) return;
             runBtn.disabled = !updated.command || updated.command.trim().length === 0;
+            if (chainBtn) {
+                chainBtn.disabled = runBtn.disabled;
+            }
         };
 
         const addInput = (labelText, value, onChange) => {
@@ -537,8 +541,7 @@
             persistMeta();
             runBtn.disabled = true;
             try {
-                const result = await this.dotnet.invokeMethodAsync("ExecuteBlockCommand", block.id);
-                alert(result);
+                await this.dotnet.invokeMethodAsync("ExecuteBlockCommand", block.id);
             } catch (err) {
                 alert("Failed to run LLM: " + err);
             } finally {
@@ -546,6 +549,24 @@
             }
         });
         menu.appendChild(runBtn);
+
+        chainBtn = document.createElement("button");
+        chainBtn.textContent = "Run flow from here";
+        chainBtn.style.marginTop = "8px";
+        chainBtn.style.marginLeft = "6px";
+        updateRunBtn();
+        chainBtn.addEventListener("click", async () => {
+            persistMeta();
+            chainBtn.disabled = true;
+            try {
+                await this.dotnet.invokeMethodAsync("ExecuteBlockChain", block.id);
+            } catch (err) {
+                alert("Failed to run flow: " + err);
+            } finally {
+                chainBtn.disabled = false;
+            }
+        });
+        menu.appendChild(chainBtn);
 
         document.body.appendChild(menu);
         this.contextMenuEl = menu;

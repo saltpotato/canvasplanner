@@ -29,11 +29,43 @@
 <div class="toolbar">
     <button @onclick="AddBlock">Add Block</button>
     <button @onclick="ExportMermaid">Export Mermaid</button>
+    <button @onclick="RunFlowFromEntryPoints" disabled="@isExecuting">Run Connected Flow</button>
 </div>
 
 <p style="color:#555; font-size:14px;">
     Drag a side dot to another block's side to connect. Right-click a block to set LLM command (and toggle web search) or run it. Right-click a link to set arrow direction or type (arrow/aggregation).
 </p>
+
+<div style="border:1px solid #ccc; padding:8px; margin-bottom:10px;">
+    <div><strong>Execution</strong></div>
+    <div style="color:#333;">@executionStatus</div>
+    @if (!string.IsNullOrWhiteSpace(activeCommandPreview))
+    {
+        <div style="font-size:13px; color:#555; margin-top:4px;">
+            Command: <code>@activeCommandPreview</code>
+        </div>
+    }
+    @if (executionLog.Count > 0)
+    {
+        <div style="margin-top:6px; font-weight:bold;">Recent results</div>
+        <ul style="margin:4px 0 0 14px; padding:0; font-size:13px; color:#333;">
+            @foreach (var entry in executionLog)
+            {
+                <li style="margin-bottom:6px;">
+                    <div><strong>@entry.Label</strong> (@entry.BlockId) — @entry.Timestamp.ToLocalTime()</div>
+                    <div style="color:#555;">Cmd: <code>@entry.Command</code></div>
+                    <div style="color:#555;">Pieces:</div>
+                    <ul style="margin:2px 0 0 14px;">
+                        @foreach (var piece in entry.Pieces)
+                        {
+                            <li>@piece</li>
+                        }
+                    </ul>
+                </li>
+            }
+        </ul>
+    }
+</div>
 
 <pre>@mermaidOutput</pre>
 
@@ -47,6 +79,7 @@
     List<Block> blocks = new();
     List<Link> links = new();
     Dictionary<string, string> blockOutputs = new();
+    List<ExecutionLogEntry> executionLog = new();
 
     string mermaidOutput = "";
 
@@ -58,6 +91,9 @@
     bool IsDirty => SnapshotState() != lastSnapshot;
     string statusMessage = "";
     bool CanSave => !string.IsNullOrWhiteSpace(saveLabel) || int.TryParse(selectedDiagramId, out _);
+    bool isExecuting = false;
+    string executionStatus = "Idle";
+    string activeCommandPreview = "";
 
     protected override async Task OnInitializedAsync()
     {
@@ -89,6 +125,8 @@
     }
 
     void ExportMermaid() => mermaidOutput = MermaidExporter.ToMermaid2(blocks, links);
+
+    int? CurrentDiagramId => int.TryParse(selectedDiagramId, out var parsed) ? parsed : null;
 
     // JS → C# interop
     [JSInvokable]
@@ -165,13 +203,87 @@
     }
 
     [JSInvokable]
-    public async Task<string> ExecuteBlockCommand(string id)
+    public Task<string> ExecuteBlockCommand(string id) => ExecuteBlockPipeline(id, cascade: false);
+
+    [JSInvokable]
+    public Task<string> ExecuteBlockChain(string id) => ExecuteBlockPipeline(id, cascade: true);
+
+    async Task<string> ExecuteBlockPipeline(string id, bool cascade)
     {
+        if (isExecuting)
+        {
+            return "A run is already in progress. Please wait.";
+        }
+
         var block = blocks.FirstOrDefault(b => b.Id == id);
         if (block == null) return "Block not found.";
         if (string.IsNullOrWhiteSpace(block.Command)) return "No LLM command set.";
 
-        var inbound = links.Where(l => l.To == id).ToList();
+        isExecuting = true;
+        var visited = new HashSet<string>();
+        string? last = null;
+
+        try
+        {
+            last = await ExecuteQueue(new[] { id }, cascade, visited);
+            return last ?? "";
+        }
+        finally
+        {
+            isExecuting = false;
+            executionStatus = "Idle";
+            activeCommandPreview = "";
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    async Task<string?> ExecuteQueue(IEnumerable<string> startIds, bool cascade, HashSet<string> visited)
+    {
+        string? last = null;
+        var queue = new Queue<string>(startIds);
+
+        while (queue.Count > 0)
+        {
+            var nextId = queue.Dequeue();
+            if (!visited.Add(nextId)) continue;
+
+            var block = blocks.FirstOrDefault(b => b.Id == nextId);
+            if (block == null || string.IsNullOrWhiteSpace(block.Command)) continue;
+
+            last = await ExecuteSingleBlock(block);
+
+            if (cascade)
+            {
+                var downstream = links.Where(l => l.From == nextId).Select(l => l.To).Distinct();
+                foreach (var child in downstream)
+                {
+                    queue.Enqueue(child);
+                }
+            }
+        }
+
+        return last;
+    }
+
+    async Task<string> ExecuteSingleBlock(Block block)
+    {
+        var prompt = BuildPrompt(block);
+        executionStatus = $"Running {block.Text} ({block.Id})";
+        activeCommandPreview = TrimCommand(block.Command ?? "");
+        await InvokeAsync(StateHasChanged);
+
+        var result = await Llm.ExecuteAsync(prompt, block.UseSearch);
+        var output = result ?? "";
+        blockOutputs[block.Id] = output;
+
+        var pieces = ChunkOutput(output);
+        await TrackExecutionAsync(block, prompt, output, pieces);
+        return output;
+    }
+
+    string BuildPrompt(Block block)
+    {
+        var inbound = links.Where(l => l.To == block.Id).ToList();
         var contextParts = new List<string>();
         foreach (var link in inbound)
         {
@@ -183,15 +295,128 @@
             }
         }
 
-        var prompt = block.Command;
-        if (contextParts.Count > 0)
+        var command = block.Command ?? "";
+        if (contextParts.Count == 0) return command;
+        return string.Join("\n\n", contextParts) + "\n\n" + command;
+    }
+
+    async Task TrackExecutionAsync(Block block, string prompt, string output, List<string> pieces)
+    {
+        var entry = new ExecutionLogEntry(
+            block.Id,
+            string.IsNullOrWhiteSpace(block.Text) ? block.Id : block.Text,
+            TrimCommand(block.Command ?? ""),
+            pieces,
+            DateTime.UtcNow,
+            output);
+
+        executionLog.Insert(0, entry);
+        if (executionLog.Count > 15)
         {
-            prompt = string.Join("\n\n", contextParts) + "\n\n" + block.Command;
+            executionLog.RemoveRange(15, executionLog.Count - 15);
         }
 
-        var result = await Llm.ExecuteAsync(prompt, block.UseSearch);
-        blockOutputs[id] = result ?? "";
-        return result ?? "";
+        try
+        {
+            await Storage.LogBlockExecutionAsync(
+                CurrentDiagramId,
+                block.Id,
+                block.Text ?? block.Id,
+                block.Command ?? "",
+                prompt,
+                output,
+                pieces);
+        }
+        catch
+        {
+            // Non-fatal; show UI update but don't break the flow.
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    List<string> ChunkOutput(string text)
+    {
+        var pieces = new List<string>();
+        if (string.IsNullOrWhiteSpace(text)) return pieces;
+
+        var lines = text.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .ToList();
+
+        var bulletPieces = lines
+            .Where(l => l.StartsWith("-") || l.StartsWith("*") || char.IsDigit(l[0]))
+            .Select(l => l.TrimStart('-', '*', ' ', '\t'))
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .ToList();
+
+        if (bulletPieces.Count >= 2)
+        {
+            return bulletPieces;
+        }
+
+        var paragraphs = text.Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Trim())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+
+        if (paragraphs.Count >= 2)
+        {
+            return paragraphs;
+        }
+
+        const int chunkSize = 400;
+        if (text.Length > chunkSize * 2)
+        {
+            for (int i = 0; i < text.Length; i += chunkSize)
+            {
+                var len = Math.Min(chunkSize, text.Length - i);
+                pieces.Add(text.Substring(i, len).Trim());
+            }
+            return pieces.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        }
+
+        pieces.Add(text.Trim());
+        return pieces;
+    }
+
+    string TrimCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return "";
+        const int max = 120;
+        return command.Length <= max ? command : command[..max] + "...";
+    }
+
+    async Task RunFlowFromEntryPoints()
+    {
+        if (isExecuting || blocks.Count == 0) return;
+
+        var starts = blocks
+            .Where(b => !links.Any(l => l.To == b.Id))
+            .Select(b => b.Id)
+            .ToList();
+
+        if (starts.Count == 0)
+        {
+            starts = blocks.Select(b => b.Id).ToList();
+        }
+
+        isExecuting = true;
+        executionStatus = "Running connected flow...";
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            await ExecuteQueue(starts, cascade: true, new HashSet<string>());
+        }
+        finally
+        {
+            isExecuting = false;
+            executionStatus = "Idle";
+            activeCommandPreview = "";
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     // Saving / Loading
@@ -223,6 +448,9 @@
         await LoadList();
         lastSnapshot = SnapshotState();
         blockOutputs.Clear();
+        executionLog.Clear();
+        executionStatus = "Saved.";
+        activeCommandPreview = "";
         statusMessage = "Saved.";
         await InvokeAsync(StateHasChanged);
     }
@@ -244,6 +472,9 @@
             lastSnapshot = SnapshotState();
             statusMessage = "";
             blockOutputs.Clear();
+            executionLog.Clear();
+            executionStatus = "Loaded diagram.";
+            activeCommandPreview = "";
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -272,4 +503,12 @@
     }
 
     void NotifyChanged() => InvokeAsync(StateHasChanged);
+
+    record ExecutionLogEntry(
+        string BlockId,
+        string Label,
+        string Command,
+        List<string> Pieces,
+        DateTime Timestamp,
+        string RawOutput);
 }

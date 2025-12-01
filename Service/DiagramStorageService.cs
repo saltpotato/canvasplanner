@@ -7,10 +7,12 @@ namespace canvasplanner.Service;
 public class DiagramStorageService
 {
     private readonly DiagramDbContext _db;
+    private static bool _executionTableReady;
 
     public DiagramStorageService(DiagramDbContext db)
     {
         _db = db;
+        EnsureExecutionTable();
     }
 
     public async Task<int> SaveAsync(string label, List<Block> blocks, List<Link> links, int? id = null)
@@ -38,6 +40,34 @@ public class DiagramStorageService
 
         await _db.SaveChangesAsync();
         return entry.Id;
+    }
+
+    public async Task<int> LogBlockExecutionAsync(
+        int? diagramId,
+        string blockId,
+        string blockText,
+        string command,
+        string prompt,
+        string output,
+        List<string> chunks)
+    {
+        EnsureExecutionTable();
+
+        var execution = new BlockExecution
+        {
+            DiagramId = diagramId,
+            BlockId = blockId,
+            BlockText = blockText,
+            Command = command,
+            Prompt = prompt,
+            Output = output,
+            ChunkedOutput = JsonSerializer.Serialize(chunks),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _db.BlockExecutions.Add(execution);
+        await _db.SaveChangesAsync();
+        return execution.Id;
     }
 
     public async Task<List<(int Id, string Label)>> ListAllAsync()
@@ -84,5 +114,34 @@ public class DiagramStorageService
     {
         public List<Block>? blocks { get; set; }
         public List<Link>? links { get; set; }
+    }
+
+    private void EnsureExecutionTable()
+    {
+        if (_executionTableReady) return;
+
+        try
+        {
+            _db.Database.ExecuteSqlRaw(@"
+                CREATE TABLE IF NOT EXISTS BlockExecutions (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    DiagramId INTEGER NULL,
+                    BlockId TEXT NOT NULL,
+                    BlockText TEXT NOT NULL,
+                    Command TEXT NOT NULL,
+                    Prompt TEXT NOT NULL,
+                    Output TEXT NOT NULL,
+                    ChunkedOutput TEXT NOT NULL,
+                    CreatedAt TEXT NOT NULL,
+                    FOREIGN KEY (DiagramId) REFERENCES Diagrams(Id)
+                );
+            ");
+
+            _executionTableReady = true;
+        }
+        catch
+        {
+            // Let callers proceed; failures will surface on insert and be logged by EF.
+        }
     }
 }
