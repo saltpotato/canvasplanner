@@ -2,6 +2,7 @@
 @using canvasplanner.Service
 @using canvasplanner.Data
 @using System.Text.Json
+@using System.Text.RegularExpressions
 @inject IJSRuntime JS
 @inject DiagramStorageService Storage
 @inject LlmService Llm
@@ -11,6 +12,7 @@
 <div style="margin-bottom:10px;">
     <input @bind="saveLabel" placeholder="Label..." />
     <button @onclick="SaveToDb">Save</button>
+    <button @onclick="DeleteDiagram" disabled="@(!int.TryParse(selectedDiagramId, out _))">Delete Project</button>
 
     <select @onchange="LoadFromDb">
         <option value="">-- Load Saved Diagram --</option>
@@ -119,7 +121,7 @@
     void AddBlock()
     {
         var id = $"node{blocks.Count + 1}";
-        blocks.Add(new Block(id, 100, 100, "New Block", "", false));
+        blocks.Add(new Block(id, 100, 100, "New Block", "", false, false));
         JS.InvokeVoidAsync("diagram.draw", blocks, links);
         NotifyChanged();
     }
@@ -184,7 +186,7 @@
     }
 
     [JSInvokable]
-    public Task UpdateBlockMeta(string id, string? text, string? command, bool? useSearch)
+    public Task UpdateBlockMeta(string id, string? text, string? command, bool? useSearch, bool? chunkWithLlm)
     {
         var block = blocks.FirstOrDefault(b => b.Id == id);
         if (block != null)
@@ -194,7 +196,8 @@
             {
                 Text = text ?? block.Text,
                 Command = command ?? block.Command,
-                UseSearch = useSearch ?? block.UseSearch
+                UseSearch = useSearch ?? block.UseSearch,
+                ChunkWithLlm = chunkWithLlm ?? block.ChunkWithLlm
             });
         }
 
@@ -207,6 +210,40 @@
 
     [JSInvokable]
     public Task<string> ExecuteBlockChain(string id) => ExecuteBlockPipeline(id, cascade: true);
+
+    [JSInvokable]
+    public Task DeleteBlock(string id)
+    {
+        var block = blocks.FirstOrDefault(b => b.Id == id);
+        if (block != null)
+        {
+            blocks.Remove(block);
+            links = links.Where(l => l.From != id && l.To != id).ToList();
+            blockOutputs.Remove(id);
+            executionLog = executionLog.Where(e => e.BlockId != id).ToList();
+            NotifyChanged();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task DeleteConnection(string from, string to, string fromSide, string toSide)
+    {
+        var link = links.FirstOrDefault(l =>
+            l.From == from &&
+            l.To == to &&
+            l.FromSide == fromSide &&
+            l.ToSide == toSide);
+
+        if (link != null)
+        {
+            links.Remove(link);
+            NotifyChanged();
+        }
+
+        return Task.CompletedTask;
+    }
 
     async Task<string> ExecuteBlockPipeline(string id, bool cascade)
     {
@@ -276,7 +313,7 @@
         var output = result ?? "";
         blockOutputs[block.Id] = output;
 
-        var pieces = ChunkOutput(output);
+        var pieces = await ChunkOutput(block, output);
         await TrackExecutionAsync(block, prompt, output, pieces);
         return output;
     }
@@ -335,50 +372,90 @@
         await InvokeAsync(StateHasChanged);
     }
 
-    List<string> ChunkOutput(string text)
+    async Task<List<string>> ChunkOutput(Block block, string text)
     {
         var pieces = new List<string>();
         if (string.IsNullOrWhiteSpace(text)) return pieces;
 
+        if (block.ChunkWithLlm)
+        {
+            var llmChunks = await ChunkWithLlmAsync(text);
+            if (llmChunks.Count > 0) return llmChunks;
+        }
+
         var lines = text.Split('\n')
             .Select(l => l.Trim())
-            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Where(l => l.Length > 0)
             .ToList();
 
-        var bulletPieces = lines
-            .Where(l => l.StartsWith("-") || l.StartsWith("*") || char.IsDigit(l[0]))
-            .Select(l => l.TrimStart('-', '*', ' ', '\t'))
-            .Where(l => !string.IsNullOrWhiteSpace(l))
-            .ToList();
-
-        if (bulletPieces.Count >= 2)
+        // 1) bullet/numbered lists
+        var bulletPieces = new List<string>();
+        foreach (var line in lines)
         {
-            return bulletPieces;
+            var match = Regex.Match(line, @"^\s*(?:[-*•–—]|(\d+)[\.\)])\s*(.+)$");
+            if (match.Success)
+            {
+                bulletPieces.Add(match.Groups[2].Value.Trim());
+            }
         }
+        if (bulletPieces.Count >= 2) return bulletPieces;
 
-        var paragraphs = text.Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+        // 2) paragraph splits
+        var paragraphs = Regex.Split(text, @"\n\s*\n+")
             .Select(p => p.Trim())
-            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Where(p => p.Length > 0)
             .ToList();
+        if (paragraphs.Count >= 2) return paragraphs;
 
-        if (paragraphs.Count >= 2)
-        {
-            return paragraphs;
-        }
+        // 3) sentence-ish splits
+        var sentences = Regex.Split(text, @"(?<=[\.!\?])\s+(?=[A-Z0-9])")
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToList();
+        if (sentences.Count >= 2 && sentences.All(s => s.Length < 300)) return sentences;
 
+        // 4) fixed-size chunks as last resort
         const int chunkSize = 400;
         if (text.Length > chunkSize * 2)
         {
             for (int i = 0; i < text.Length; i += chunkSize)
             {
                 var len = Math.Min(chunkSize, text.Length - i);
-                pieces.Add(text.Substring(i, len).Trim());
+                var chunk = text.Substring(i, len).Trim();
+                if (chunk.Length > 0) pieces.Add(chunk);
             }
-            return pieces.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+            return pieces;
         }
 
         pieces.Add(text.Trim());
         return pieces;
+    }
+
+    async Task<List<string>> ChunkWithLlmAsync(string text)
+    {
+        try
+        {
+            var prompt = """
+                Split the following content into atomic units. Return each unit on its own line, no numbering, no bullets, no markdown, no extra text. Do not drop content; just split.
+
+                ---
+                {CONTENT}
+                ---
+                """.Replace("{CONTENT}", text);
+
+            var response = await Llm.ExecuteAsync(prompt, useSearch: false);
+            if (string.IsNullOrWhiteSpace(response)) return new List<string>();
+
+            return response
+                .Split('\n')
+                .Select(l => l.Trim().TrimStart('-', '*'))
+                .Where(l => l.Length > 0)
+                .ToList();
+        }
+        catch
+        {
+            return new List<string>();
+        }
     }
 
     string TrimCommand(string command)
@@ -455,6 +532,38 @@
         await InvokeAsync(StateHasChanged);
     }
 
+    async Task DeleteDiagram()
+    {
+        statusMessage = "";
+        if (!int.TryParse(selectedDiagramId, out var id))
+        {
+            statusMessage = "Select a project to delete.";
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var ok = await Storage.DeleteDiagramAsync(id);
+        if (ok)
+        {
+            blocks.Clear();
+            links.Clear();
+            blockOutputs.Clear();
+            executionLog.Clear();
+            selectedDiagramId = "";
+            saveLabel = "";
+            await LoadList();
+            await JS.InvokeVoidAsync("diagram.draw", blocks, links);
+            lastSnapshot = SnapshotState();
+            statusMessage = "Project deleted.";
+        }
+        else
+        {
+            statusMessage = "Delete failed.";
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
     async Task LoadFromDb(ChangeEventArgs e)
     {
         selectedDiagramId = e.Value?.ToString() ?? "";
@@ -483,7 +592,7 @@
     {
         var orderedBlocks = blocks
             .OrderBy(b => b.Id)
-            .Select(b => new { b.Id, b.X, b.Y, b.Text, b.Command, b.UseSearch });
+            .Select(b => new { b.Id, b.X, b.Y, b.Text, b.Command, b.UseSearch, b.ChunkWithLlm });
 
         var orderedLinks = links
             .OrderBy(l => l.From)

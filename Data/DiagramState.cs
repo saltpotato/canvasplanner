@@ -13,7 +13,8 @@
         double Y,
         string Text,    // display label
         string Command = "",
-        bool UseSearch = false
+        bool UseSearch = false,
+        bool ChunkWithLlm = false
     );
 
     public record Link(

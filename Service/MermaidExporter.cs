@@ -14,7 +14,7 @@ namespace canvasplanner.Service
             // In case you accidentally pass ValueTuples instead of Block/Link records.
             var blocks = new List<Block>();
             foreach (var b in blocksTuple)
-                blocks.Add(new Block(b.Id, b.X, b.Y, b.Text));
+                blocks.Add(new Block(b.Id, b.X, b.Y, b.Text, "", false, false));
 
             var links = new List<Link>();
             foreach (var l in linksTuple)

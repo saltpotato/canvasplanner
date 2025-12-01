@@ -70,6 +70,28 @@ public class DiagramStorageService
         return execution.Id;
     }
 
+    public async Task<bool> DeleteDiagramAsync(int id)
+    {
+        var existing = await _db.Diagrams.FindAsync(id);
+        if (existing == null) return false;
+
+        _db.Diagrams.Remove(existing);
+
+        // best-effort cleanup of executions
+        try
+        {
+            var execs = _db.BlockExecutions.Where(e => e.DiagramId == id);
+            _db.BlockExecutions.RemoveRange(execs);
+        }
+        catch
+        {
+            // non-fatal
+        }
+
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
     public async Task<List<(int Id, string Label)>> ListAllAsync()
     {
         return await _db.Diagrams
@@ -92,7 +114,8 @@ public class DiagramStorageService
                 b.Y,
                 b.Text,
                 string.IsNullOrWhiteSpace(b.Command) ? "" : b.Command,
-                b.UseSearch))
+                b.UseSearch,
+                b.ChunkWithLlm))
             .ToList();
 
         var loadedLinks = obj.links ?? new();

@@ -448,6 +448,23 @@
             { label: "Aggregation (diamond)", value: "aggregation" }
         ], link.kind ?? "arrow", "kind");
 
+        const deleteBtn = document.createElement("button");
+        deleteBtn.textContent = "🗑 Delete connection";
+        deleteBtn.style.display = "block";
+        deleteBtn.style.marginTop = "8px";
+        deleteBtn.style.color = "#b00020";
+        deleteBtn.addEventListener("click", () => {
+            this.links = this.links.filter(l =>
+                !(l.from === link.from &&
+                    l.to === link.to &&
+                    l.fromSide === link.fromSide &&
+                    l.toSide === link.toSide));
+            this.dotnet.invokeMethodAsync("DeleteConnection", link.from, link.to, link.fromSide, link.toSide);
+            this.draw(this.blocks, this.links);
+            this.hideContextMenu();
+        });
+        menu.appendChild(deleteBtn);
+
         document.body.appendChild(menu);
         this.contextMenuEl = menu;
     },
@@ -499,11 +516,12 @@
             menu.appendChild(input);
         };
 
-        let updated = { command: block.command ?? "", useSearch: block.useSearch ?? false };
+        let updated = { command: block.command ?? "", useSearch: block.useSearch ?? false, chunkWithLlm: block.chunkWithLlm ?? false };
         const persistMeta = () => {
             block.command = updated.command;
             block.useSearch = updated.useSearch;
-            this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command, block.useSearch);
+            block.chunkWithLlm = updated.chunkWithLlm;
+            this.dotnet.invokeMethodAsync("UpdateBlockMeta", block.id, block.text, block.command, block.useSearch, block.chunkWithLlm);
         };
         addInput("LLM Command", updated.command, v => updated.command = v);
 
@@ -522,6 +540,38 @@
         searchLabel.appendChild(document.createTextNode(" Allow web search"));
         searchWrapper.appendChild(searchLabel);
         menu.appendChild(searchWrapper);
+
+        const chunkWrapper = document.createElement("div");
+        chunkWrapper.style.marginTop = "6px";
+        const chunkLabel = document.createElement("label");
+        const chunkCheckbox = document.createElement("input");
+        chunkCheckbox.type = "checkbox";
+        chunkCheckbox.checked = updated.chunkWithLlm;
+        chunkCheckbox.addEventListener("change", ev => {
+            updated.chunkWithLlm = ev.target.checked;
+            persistMeta();
+        });
+        chunkLabel.appendChild(chunkCheckbox);
+        chunkLabel.appendChild(document.createTextNode(" Let LLM chunk output"));
+        chunkWrapper.appendChild(chunkLabel);
+        menu.appendChild(chunkWrapper);
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.textContent = "🗑 Delete block";
+        deleteBtn.style.display = "block";
+        deleteBtn.style.width = "100%";
+        deleteBtn.style.marginTop = "6px";
+        deleteBtn.style.background = "#ffecec";
+        deleteBtn.style.color = "#b00020";
+        deleteBtn.style.border = "1px solid #e5a3a3";
+        deleteBtn.addEventListener("click", () => {
+            this.blocks = this.blocks.filter(b => b.id !== block.id);
+            this.links = this.links.filter(l => l.from !== block.id && l.to !== block.id);
+            this.dotnet.invokeMethodAsync("DeleteBlock", block.id);
+            this.draw(this.blocks, this.links);
+            this.hideContextMenu();
+        });
+        menu.appendChild(deleteBtn);
 
         const saveBtn = document.createElement("button");
         saveBtn.textContent = "Apply";
