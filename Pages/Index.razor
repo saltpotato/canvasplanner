@@ -29,7 +29,6 @@
 
 <div class="toolbar">
     <button @onclick="AddBlock">Add Block</button>
-    <button @onclick="ExportMermaid">Export Mermaid</button>
     <button @onclick="RunFlowFromEntryPoints" disabled="@isExecuting">Run Connected Flow</button>
 </div>
 
@@ -68,8 +67,6 @@
     }
 </div>
 
-<pre>@mermaidOutput</pre>
-
 <canvas id="diagramCanvas" width="1000" height="600"
         style="border:1px solid #888;"></canvas>
 
@@ -81,8 +78,6 @@
     List<Link> links = new();
     Dictionary<string, string> blockOutputs = new();
     List<ExecutionLogEntry> executionLog = new();
-
-    string mermaidOutput = "";
 
     // UI
     string saveLabel = "";
@@ -139,8 +134,6 @@
         JS.InvokeVoidAsync("diagram.draw", blocks, links);
         NotifyChanged();
     }
-
-    void ExportMermaid() => mermaidOutput = MermaidExporter.ToMermaid2(blocks, links);
 
     int? CurrentDiagramId => int.TryParse(selectedDiagramId, out var parsed) ? parsed : null;
 

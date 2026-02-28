@@ -8,7 +8,6 @@ Diagram-first flow runner for chaining LLM prompts across connected blocks. Buil
 - Run single blocks or a connected flow (downstream traversal from entry points).
 - Context menu controls: set command, toggle web search, toggle LLM chunking, run, run flow from here, delete block; right-click links to edit direction/type or delete.
 - Persistence: save/load diagrams with labels; delete projects; execution logs stored in `BlockExecutions`.
-- Export to Mermaid via toolbar.
 
 ## Getting Started
 Prereqs: .NET 8 SDK, SQLite available on the host, and optionally Ollama for local LLM plus web search API key.

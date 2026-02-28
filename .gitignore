@@ -23,3 +23,8 @@ obj/
 # Publish output
 publish/
 .env
+
+# everything in artifacts
+artifacts/
+# everything in bin
+bin/
