@@ -512,11 +512,19 @@
             input.style.width = "240px";
             input.addEventListener("keydown", ev => ev.stopPropagation());
             input.addEventListener("change", ev => { onChange(ev.target.value); updateRunBtn(); persistMeta(); });
-            input.addEventListener("input", ev => { onChange(ev.target.value); updateRunBtn(); });
+            input.addEventListener("input", ev => {
+                onChange(ev.target.value);
+                updateRunBtn();
+                if (persistTimer) {
+                    clearTimeout(persistTimer);
+                }
+                persistTimer = setTimeout(() => persistMeta(), 400);
+            });
             menu.appendChild(input);
         };
 
         let updated = { command: block.command ?? "", useSearch: block.useSearch ?? false, chunkWithLlm: block.chunkWithLlm ?? false };
+        let persistTimer = null;
         const persistMeta = () => {
             block.command = updated.command;
             block.useSearch = updated.useSearch;
@@ -572,15 +580,6 @@
             this.hideContextMenu();
         });
         menu.appendChild(deleteBtn);
-
-        const saveBtn = document.createElement("button");
-        saveBtn.textContent = "Apply";
-        saveBtn.style.marginTop = "8px";
-        saveBtn.addEventListener("click", () => {
-            persistMeta();
-            this.hideContextMenu();
-        });
-        menu.appendChild(saveBtn);
 
         runBtn = document.createElement("button");
         runBtn.textContent = "Run LLM";

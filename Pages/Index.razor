@@ -10,8 +10,7 @@
 <h3>Diagram Editor@(IsDirty ? "*" : "")</h3>
 
 <div style="margin-bottom:10px;">
-    <input @bind="saveLabel" placeholder="Label..." />
-    <button @onclick="SaveToDb">Save</button>
+    <input value="@saveLabel" @oninput="OnLabelInput" placeholder="Project name..." />
     <button @onclick="DeleteDiagram" disabled="@(!int.TryParse(selectedDiagramId, out _))">Delete Project</button>
 
     <select @onchange="LoadFromDb">
@@ -92,14 +91,28 @@
     string lastSnapshot = "";
     bool IsDirty => SnapshotState() != lastSnapshot;
     string statusMessage = "";
-    bool CanSave => !string.IsNullOrWhiteSpace(saveLabel) || int.TryParse(selectedDiagramId, out _);
     bool isExecuting = false;
     string executionStatus = "Idle";
     string activeCommandPreview = "";
+    CancellationTokenSource? autosaveCts;
+    bool suppressAutosave;
 
     protected override async Task OnInitializedAsync()
     {
+        suppressAutosave = true;
+
         await LoadList();
+        if (savedList.Count > 0)
+        {
+            var latest = savedList[0];
+            selectedDiagramId = latest.Id.ToString();
+            var (b, l) = await Storage.LoadAsync(latest.Id);
+            blocks = b;
+            links = l;
+            saveLabel = latest.Label;
+        }
+
+        suppressAutosave = false;
         lastSnapshot = SnapshotState();
         blockOutputs.Clear();
     }
@@ -112,6 +125,7 @@
                 "diagram.init",
                 DotNetObjectReference.Create(this)
             );
+            await JS.InvokeVoidAsync("diagram.draw", blocks, links);
 
             lastSnapshot = SnapshotState();
             await InvokeAsync(StateHasChanged);
@@ -496,27 +510,30 @@
         }
     }
 
+    Task OnLabelInput(ChangeEventArgs e)
+    {
+        saveLabel = e.Value?.ToString() ?? "";
+        NotifyChanged();
+        return Task.CompletedTask;
+    }
+
     // Saving / Loading
     async Task LoadList()
     {
         savedList = await Storage.ListAllAsync();
     }
 
-    async Task SaveToDb()
+    async Task AutoSaveAsync()
     {
-        statusMessage = "";
+        if (suppressAutosave) return;
 
         int? targetId = int.TryParse(selectedDiagramId, out var parsedId) ? parsedId : null;
         var targetLabel = !string.IsNullOrWhiteSpace(saveLabel)
             ? saveLabel
-            : GetLabelForId(targetId);
+            : GetLabelForId(targetId) ?? "Autosave";
 
-        if (string.IsNullOrWhiteSpace(targetLabel))
-        {
-            statusMessage = "Select a project or enter a name before saving.";
-            await InvokeAsync(StateHasChanged);
-            return;
-        }
+        statusMessage = "Autosaving...";
+        await InvokeAsync(StateHasChanged);
 
         var savedId = await Storage.SaveAsync(targetLabel, blocks, links, targetId);
 
@@ -524,12 +541,33 @@
         selectedDiagramId = savedId.ToString();
         await LoadList();
         lastSnapshot = SnapshotState();
-        blockOutputs.Clear();
-        executionLog.Clear();
-        executionStatus = "Saved.";
-        activeCommandPreview = "";
-        statusMessage = "Saved.";
+        statusMessage = $"Autosaved at {DateTime.Now:HH:mm:ss}";
         await InvokeAsync(StateHasChanged);
+    }
+
+    void ScheduleAutosave()
+    {
+        if (suppressAutosave) return;
+
+        autosaveCts?.Cancel();
+        autosaveCts = new CancellationTokenSource();
+        var token = autosaveCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(700, token);
+                if (!token.IsCancellationRequested)
+                {
+                    await InvokeAsync(AutoSaveAsync);
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                // Debounce cancellation is expected.
+            }
+        }, token);
     }
 
     async Task DeleteDiagram()
@@ -566,6 +604,7 @@
 
     async Task LoadFromDb(ChangeEventArgs e)
     {
+        suppressAutosave = true;
         selectedDiagramId = e.Value?.ToString() ?? "";
 
         if (int.TryParse(selectedDiagramId, out int id))
@@ -586,6 +625,7 @@
             activeCommandPreview = "";
             await InvokeAsync(StateHasChanged);
         }
+        suppressAutosave = false;
     }
 
     string SnapshotState()
@@ -611,7 +651,11 @@
         return found == default ? null : found.Label;
     }
 
-    void NotifyChanged() => InvokeAsync(StateHasChanged);
+    void NotifyChanged()
+    {
+        ScheduleAutosave();
+        InvokeAsync(StateHasChanged);
+    }
 
     record ExecutionLogEntry(
         string BlockId,
